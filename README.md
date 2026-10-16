@@ -25,7 +25,7 @@ Cualquier actualización regulatoria de la **DGII** (cambios en tipos de comprob
 - **Ley 32-23:** Régimen de Facturación Electrónica obligatoria en la República Dominicana.
 - **Ley 11-92:** Código Tributario de la República Dominicana.
 - **Norma General 02-05:** Retención del 100% de ITBIS en servicios profesionales prestados por personas físicas a sociedades.
-- **Norma General 07-07:** Retención del 10% de ISR en servicios profesionales de personas físicas (Art. 309).
+- **Retención del 15% de ISR:** Tasa vigente de retención de Impuesto Sobre la Renta (15%) para servicios profesionales, honorarios, comisiones y alquileres prestados por personas físicas a sociedades (conforme a las modificaciones normativas de la DGII / Ley 30-26).
 - **Norma General 07-2018:** Obligatoriedad de RNC/Cédula en facturas de consumo iguales o superiores a RD$ 250,000.00.
 - **Regímenes Especiales (`E44`):** Facturación obligatoria con tasa Exenta (0% ITBIS) para empresas bajo carnet de exención fiscal DGII (Zonas Francas, Ley 8-90, etc.).
 
