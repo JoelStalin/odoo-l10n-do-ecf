@@ -11,14 +11,14 @@
     "category": "Human Resources/Payroll",
     "license": "LGPL-3",
     "website": "https://getupsoft.com",
-    "version": "20.0.1.0.0",
+    "version": "20.0.1.1.0",
     "countries": ["do"],
     "depends": [
         "hr",
         "l10n_do_accounting",
     ],
     "data": [
-        "security/ir.model.access.csv",
+        "security/ir.access.csv",
         "data/l10n_do_payroll_data.xml",
         "views/hr_employee_views.xml",
         "views/hr_payslip_views.xml",
