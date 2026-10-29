@@ -1,78 +1,51 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# update-client-module.sh - EasyCount / GetUpSoft Odoo Localization Updater
+# GetUpSoft / EasyCount / ORCA — Script de Instalación y Sincronización Global
+# Repositorio Global: https://github.com/JoelStalin/odoo-orca-global-addons
 # ==============================================================================
-# Actualiza los modulos l10n_do_accounting, l10n_do_accounting_report y
-# l10n_do_hr_payroll en el servidor de un cliente desde el repositorio en GitHub:
-# https://github.com/JoelStalin/odoo-l10n-do-ecf
-# ==============================================================================
-
 set -euo pipefail
 
-REPO_URL="https://github.com/JoelStalin/odoo-l10n-do-ecf.git"
-TARBALL_URL="https://github.com/JoelStalin/odoo-l10n-do-ecf/archive/refs/heads/main.tar.gz"
-
-ADDONS_DIR="${1:-/opt/odoo/extra-addons}"
+REPO_URL="${EASYCOUNT_GLOBAL_REPO_URL:-https://github.com/JoelStalin/odoo-orca-global-addons.git}"
+BRANCH="${EASYCOUNT_GLOBAL_BRANCH:-main}"
+TARGET_ADDONS_DIR="${1:-/opt/odoo/extra-addons}"
 ODOO_DB="${2:-}"
-ODOO_CONTAINER="${3:-}"
-
-MODULES_LIST="l10n_do_accounting,l10n_do_accounting_report,l10n_do_hr_payroll"
+ODOO_BIN="${ODOO_BIN:-/opt/odoo/odoo20-venv/bin/python3 /opt/odoo/odoo20/odoo-bin}"
+ODOO_CONF="${ODOO_CONF:-/opt/odoo/config/odoo.conf}"
 
 echo "=================================================================="
-echo ">> EASYCOUNT / GETUPSOFT - ACTUALIZADOR DE LOCALIZACION DOMINICANA"
+echo " GetUpSoft / EasyCount / ORCA — Sincronización Global de Addons"
+echo " Repositorio : $REPO_URL ($BRANCH)"
+echo " Destino     : $TARGET_ADDONS_DIR"
 echo "=================================================================="
-echo ">> Directorio destino: ${ADDONS_DIR}"
-echo ">> Repositorio fuente: ${REPO_URL}"
-echo ">> Modulos a sincronizar: ${MODULES_LIST}"
-
-# 1. Verificar o crear directorio de addons
-mkdir -p "${ADDONS_DIR}"
 
 TMP_DIR="$(mktemp -d)"
-trap  rm -rf   EXIT
+trap 'rm -rf "$TMP_DIR"' EXIT
 
-echo ">> [1/4] Descargando version mas reciente desde GitHub..."
-if command -v git &>/dev/null; then
-    git clone --depth 1 "${REPO_URL}" "${TMP_DIR}/repo" 2>/dev/null || {
-        echo ">> Aviso: Fallo git clone, intentando descarga directa tar.gz..."
-        curl -fsSL "${TARBALL_URL}" | tar -xz -C "${TMP_DIR}"
-        mv "${TMP_DIR}/odoo-l10n-do-ecf-main" "${TMP_DIR}/repo"
-    }
+echo "[1/3] Descargando última versión desde GitHub..."
+git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$TMP_DIR/repo"
+
+echo "[2/3] Sincronizando módulos en $TARGET_ADDONS_DIR..."
+mkdir -p "$TARGET_ADDONS_DIR"
+
+for mod in l10n_do_accounting l10n_do_accounting_report l10n_do_hr_payroll orca_stock_logistics_barcode; do
+  if [ -d "$TMP_DIR/repo/$mod" ]; then
+    rm -rf "$TARGET_ADDONS_DIR/$mod"
+    cp -r "$TMP_DIR/repo/$mod" "$TARGET_ADDONS_DIR/$mod"
+    echo "  -> Módulo sincronizado: $mod"
+  fi
+done
+
+if [ -n "$ODOO_DB" ]; then
+  echo "[3/3] Instalando/actualizando módulos en la base de datos: $ODOO_DB..."
+  $ODOO_BIN -c "$ODOO_CONF" -d "$ODOO_DB" \
+    -i orca_stock_logistics_barcode \
+    -u l10n_do_accounting,l10n_do_accounting_report,orca_stock_logistics_barcode \
+    --stop-after-init
+  echo "  -> Base de datos $ODOO_DB actualizada exitosamente."
 else
-    curl -fsSL "${TARBALL_URL}" | tar -xz -C "${TMP_DIR}"
-    mv "${TMP_DIR}/odoo-l10n-do-ecf-main" "${TMP_DIR}/repo"
-fi
-
-echo ">> [2/4] Sincronizando modulos en el servidor del cliente..."
-cp -r "${TMP_DIR}/repo/l10n_do_accounting" "${ADDONS_DIR}/"
-cp -r "${TMP_DIR}/repo/l10n_do_accounting_report" "${ADDONS_DIR}/"
-cp -r "${TMP_DIR}/repo/l10n_do_hr_payroll" "${ADDONS_DIR}/"
-
-# Limpieza de cache de python
-find "${ADDONS_DIR}/l10n_do_accounting" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-find "${ADDONS_DIR}/l10n_do_accounting_report" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-find "${ADDONS_DIR}/l10n_do_hr_payroll" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-
-echo ">> [3/4] Modulos actualizados exitosamente en disco."
-
-# 3. Si se suministro contenedor Docker o base de datos Odoo, actualizar en BD
-if [ -n "${ODOO_CONTAINER}" ] && [ -n "${ODOO_DB}" ]; then
-    echo ">> [4/4] Actualizando modulos en contenedor Docker: ${ODOO_CONTAINER} (BD: ${ODOO_DB})..."
-    docker exec "${ODOO_CONTAINER}" odoo -u ${MODULES_LIST} -d "${ODOO_DB}" --stop-after-init || {
-        echo ">> Aviso: El comando odoo -u retorno codigo no-cero. Reiniciando contenedor para tomar cambios de codigo..."
-        docker restart "${ODOO_CONTAINER}"
-    }
-elif [ -n "${ODOO_DB}" ] && command -v odoo-bin &>/dev/null; then
-    echo ">> [4/4] Ejecutando odoo-bin -u en base de datos: ${ODOO_DB}..."
-    odoo-bin -u ${MODULES_LIST} -d "${ODOO_DB}" --stop-after-init || true
-elif [ -n "${ODOO_DB}" ] && command -v odoo &>/dev/null; then
-    echo ">> [4/4] Ejecutando odoo -u en base de datos: ${ODOO_DB}..."
-    odoo -u ${MODULES_LIST} -d "${ODOO_DB}" --stop-after-init || true
-else
-    echo ">> [4/4] Actualizacion de archivos completada. Para aplicar en Odoo ejecute:"
-    echo "         odoo -u ${MODULES_LIST} -d <nombre_bd> --stop-after-init"
+  echo "[3/3] Archivos sincronizados. (Omitiendo -u/-i en BD porque no se especificó nombre de BD)."
 fi
 
 echo "=================================================================="
-echo ">> ACTUALIZACION COMPLETADA EXITOSAMENTE (100% DGII e-CF COMPLIANT)"
+echo " Sincronización completada con éxito."
 echo "=================================================================="
