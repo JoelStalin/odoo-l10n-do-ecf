@@ -120,6 +120,10 @@
     <!-- Main Report Inheritance -->
     <template id="report_invoice_document_inherited" inherit_id="account.report_invoice_document"
         primary="True">
+                <xpath expr="//t[@t-set='layout_document_title']" position="replace">
+            <!-- DGII Dominican fiscal compliance: never display Proforma Invoice or generic titles -->
+            <t t-set="layout_document_title"/>
+        </xpath>
         <xpath expr="//div[contains(@class, 'invoice_main')]" position="replace">
             <div class="clearfix invoice_main">
                 <div class="page mb-4">
