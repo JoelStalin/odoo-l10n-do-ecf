@@ -1,6 +1,7 @@
 import html
 import logging
 import re
+import time
 import urllib.parse
 import urllib.request
 from odoo import models, fields, api, _
@@ -14,6 +15,11 @@ DGII_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
 }
+
+# RNC/cedula -> (timestamp, info). Avoids hitting the DGII portal again for the same number
+# while the user is typing or the POS repeats the lookup.
+_DGII_CACHE = {}
+_DGII_CACHE_TTL = 600
 
 
 def _clean_rnc_string(val):
@@ -135,13 +141,13 @@ def query_dgii_by_rnc_standalone(rnc_or_cedula, timeout=12.0):
             "raw": parsed,
         }
     except Exception as exc:
-        _logger.warning("Error en consulta de RNC DGII: %s", exc)
+        _logger.warning("Error consultando DGII por RNC %s: %s", cleaned, exc)
         return None
 
 
 def query_dgii_by_name_standalone(name_query, timeout=12.0):
     clean_query = (name_query or "").strip()
-    if not clean_query:
+    if len(clean_query) < 4:
         return []
 
     try:
@@ -278,6 +284,47 @@ class Partner(models.Model):
                         "message": _("El número de %s '%s' tiene un dígito verificador inválido.") % (doc_type, self.vat),
                     }
                 }
+            info = self.dgii_query_rnc(clean)
+            if info:
+                self._rnc_autofill_apply(info, clean)
+
+    @api.onchange("name")
+    def _onchange_rnc_autofill_name(self):
+        name = (self.name or "").strip()
+        if len(name) < 4 or self.vat or self._origin.id:
+            return
+        if name.upper() in ("CONSUMIDOR FINAL", "CLIENTE", "CLIENTE GENERAL"):
+            return
+        found = self.dgii_query_by_name(name)
+        if not found:
+            return
+        if len(found) == 1:
+            info = found[0]
+            self.vat = info.get("rnc")
+            self._rnc_autofill_apply(info, info.get("rnc"))
+            return
+        lines = " | ".join(
+            "%s %s" % (r.get("formatted_rnc") or r.get("rnc"), r.get("name")) for r in found[:8]
+        )
+        return {
+            "warning": {
+                "title": _("Varios resultados en la DGII"),
+                "message": _("Escriba el RNC del que corresponde para completar los datos: %s") % lines,
+            }
+        }
+
+    def _rnc_autofill_apply(self, info, clean):
+        if info.get("name"):
+            self.name = info["name"]
+        self.is_company = bool(info.get("is_company", len(clean or "") == 9))
+        if info.get("commercial_name") and "commercial_name" in self._fields:
+            self.commercial_name = info["commercial_name"]
+        if info.get("regime"):
+            self.l10n_do_tax_regime = info["regime"]
+        if not self.country_id:
+            do_country = self.env.ref("base.do", raise_if_not_found=False)
+            if do_country:
+                self.country_id = do_country
 
     l10n_do_expense_type = fields.Selection(
         selection="_get_l10n_do_expense_type",
@@ -392,12 +439,86 @@ class Partner(models.Model):
     @api.model
     def dgii_query_rnc(self, rnc_or_cedula):
         """Consulta en línea a la DGII por RNC o Cédula. Retorna diccionario estructurado."""
-        return query_dgii_by_rnc_standalone(rnc_or_cedula)
+        key = _clean_rnc_string(rnc_or_cedula)
+        hit = _DGII_CACHE.get(key)
+        if hit and time.time() - hit[0] < _DGII_CACHE_TTL:
+            return hit[1]
+        res = query_dgii_by_rnc_standalone(rnc_or_cedula)
+        if res:
+            _DGII_CACHE[key] = (time.time(), res)
+        return res
 
     @api.model
     def dgii_query_by_name(self, name):
         """Consulta en línea a la DGII por Razón Social o Nombre Comercial. Retorna lista."""
         return query_dgii_by_name_standalone(name)
+
+    # -------------------------------------------------------------------------
+    # Buscar cliente por RNC/Cédula: si no existe y la DGII lo conoce, se crea.
+    # -------------------------------------------------------------------------
+    @api.model
+    def _l10n_do_find_or_create_by_vat(self, value, domain=None, limit=None):
+        """Return partners matching a 9/11-digit RNC/cedula, creating it from the DGII if missing.
+
+        Returns None when ``value`` is not a valid Dominican RNC/cedula, so callers fall back
+        to the standard search.
+        """
+        clean = _clean_rnc_string(value)
+        if len(clean) not in (9, 11):
+            return None
+        existing = self.search([("vat", "ilike", clean)] + list(domain or []), limit=limit)
+        if existing:
+            return existing
+        is_valid, _doc_type, _expected = _validate_dominican_vat_checksum(clean)
+        if not is_valid:
+            return None
+        info = self.dgii_query_rnc(clean)
+        if not info or not info.get("name"):
+            return None
+        do_country = self.env.ref("base.do", raise_if_not_found=False)
+        vals = {
+            "name": info["name"],
+            "vat": clean,
+            "is_company": bool(info.get("is_company", len(clean) == 9)),
+            "country_id": do_country.id if do_country else False,
+        }
+        if info.get("commercial_name") and "commercial_name" in self._fields:
+            vals["commercial_name"] = info["commercial_name"]
+        if info.get("regime"):
+            vals["l10n_do_tax_regime"] = info["regime"]
+        return self.sudo().create(vals).sudo(False)
+
+    @api.model
+    def _name_search(self, name="", domain=None, operator="ilike", limit=None, order=None):
+        partners = self._l10n_do_find_or_create_by_vat(name, domain, limit)
+        if partners:
+            return partners.ids
+        return super()._name_search(name, domain, operator, limit=limit, order=order)
+
+    @api.model
+    def name_search(self, name="", args=None, operator="ilike", limit=100):
+        partners = self._l10n_do_find_or_create_by_vat(name, args, limit)
+        if partners:
+            return [(p.id, p.display_name) for p in partners]
+        # Odoo 20 renamed the second name_search argument from ``args`` to ``domain``:
+        # pass it positionally to stay compatible with both signatures.
+        return super().name_search(name, args or [], operator, limit)
+
+    @api.model
+    def name_create(self, name):
+        partners = self._l10n_do_find_or_create_by_vat(name, limit=1)
+        if partners:
+            return (partners.id, partners.display_name)
+        return super().name_create(name)
+
+    @api.depends("vat")
+    def _compute_display_name(self):
+        super()._compute_display_name()
+        for partner in self:
+            if partner.vat and partner.country_code == "DO":
+                clean_vat = _clean_rnc_string(partner.vat)
+                if clean_vat and clean_vat not in (partner.display_name or ""):
+                    partner.display_name = f"{partner.name} ({partner.vat})"
 
     def action_dgii_consult(self):
         """Acción de botón en Odoo para verificar y actualizar el contacto con datos de la DGII."""
