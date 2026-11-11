@@ -29,13 +29,18 @@ commits 9eac350, 6d8a7f3, bd1fdc5, 565c9e2, cfb2ee2 y a8a740e) y en el servidor 
 - **606/607**: el ITBIS facturado de ventas se reporta en positivo y el ITBIS ya no se duplica en "otros impuestos".
 - **Ajustes de EasyCount**: los campos de estado son relacionados con la compañía (en Chefalitas se redefinían como
   campos propios del asistente y no mostraban el estado real).
+- **Serie de los diarios de venta**: un emisor e-CF usa solo la serie **E** (`_get_journal_codes` devolvía E y B). Es lo
+  que exige `test_ecf_enabled_flag` desde la versión inicial y lo que ya hacía Chefalitas.
 
 ### Sin cambios a propósito
 
-- `account_journal._get_journal_codes` sigue devolviendo series **E y B** para emisores e-CF (Chefalitas lo limitó a E;
-  queda pendiente de decisión).
 - URL por defecto de EasyCount: `https://easycount.me` (antes `https://api.getupsoft.com.do`; ambas responden).
   Solo afecta a compañías nuevas.
+
+### Conocido (previo a este cambio)
+
+- `test_04_deferred_company_keeps_invoice_pending_when_offline` falla desde #6: con EasyCount caído tampoco se puede
+  asignar el e-NCF, así que una empresa con envío diferido no puede publicar. Requiere decidir la asignación en contingencia.
 
 ### Instalación
 
