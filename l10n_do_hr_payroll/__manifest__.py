@@ -11,7 +11,7 @@
     "category": "Human Resources/Payroll",
     "license": "LGPL-3",
     "website": "https://getupsoft.com",
-    "version": "20.0.1.1.0",
+    "version": "20.0.1.1.1",
     "countries": ["do"],
     "depends": [
         "hr",

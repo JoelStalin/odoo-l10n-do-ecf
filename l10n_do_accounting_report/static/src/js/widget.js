@@ -1,103 +1,66 @@
-/** @odoo-module **/
-
+import { _t } from "@web/core/l10n/translation";
 import { registry } from "@web/core/registry";
-import { CharField } from "@web/views/fields/char/char_field"; // Base CharField
+import { session } from "@web/session";
 import { standardFieldProps } from "@web/views/fields/standard_field_props";
-import { session } from "@web/session"; // To get company RNC if needed
+import { Component, t, useProps, xml } from "@odoo/owl";
 
-const { Component, xml, onWillUpdateProps, onMounted, useRef } = owl; // Correct OWL import for v17/18
+const RNC_URL = "https://dgii.gov.do/app/WebApps/ConsultasWeb/consultas/rnc.aspx";
+const NCF_URL = "https://dgii.gov.do/app/WebApps/ConsultasWeb/consultas/ncf.aspx";
+const NCF_PATTERN = /^[BE]\d{10}$/;
+
+/**
+ * Enlace a la consulta pública de la DGII para un RNC/cédula o un NCF/e-CF.
+ * Devuelve "" si no se puede formar (sin valor, o un NCF sin RNC del emisor).
+ */
+export function dgiiConsultaUrl(value, { isRnc = false, isModify = false, recordData = {}, companyRnc = "" } = {}) {
+    const text = (value || "").toString().trim();
+    if (!text) {
+        return "";
+    }
+    if (isRnc) {
+        return `${RNC_URL}?txtRnc=${encodeURIComponent(text)}`;
+    }
+    if (isModify || NCF_PATTERN.test(text)) {
+        const rnc = recordData.rnc_cedula || recordData.company_rnc_field || companyRnc || "";
+        if (!rnc) {
+            return "";
+        }
+        return `${NCF_URL}?txtRnc=${encodeURIComponent(rnc)}&txtNcf=${encodeURIComponent(text)}`;
+    }
+    return "";
+}
 
 export class DgiiReportsUrlField extends Component {
     static template = xml`
-        <a t-if="formattedUrl" t-att-href="formattedUrl" target="_blank" class="o_field_text">
-            <t t-esc="props.value || ''"/>
-        </a>
-        <span t-else="" class="o_field_text">
-            <t t-esc="props.value || ''"/>
-        </span>
+        <a t-if="this.url" t-att-href="this.url" target="_blank" rel="noopener noreferrer" class="o_field_text" t-out="this.value"/>
+        <span t-else="" class="o_field_text" t-out="this.value"/>
     `;
+    props = useProps({
+        ...standardFieldProps,
+        isRnc: t.boolean().optional(false),
+        isModify: t.boolean().optional(false),
+    });
 
-    // Define props based on standardFieldProps and add your custom options
-    static props = {
-        ...standardFieldProps, // Includes props like 'value', 'record', 'name', 'readonly', etc.
-        is_rnc: { type: Boolean, optional: true },
-        is_modify: { type: Boolean, optional: true }, // Assuming this was from your options
-    };
+    get value() {
+        return this.props.record.data[this.props.name] || "";
+    }
 
-    setup() {
-        this.formattedUrl = ""; // Initialize
-
-        onWillUpdateProps(async (nextProps) => {
-            this._setFormattedUrl(nextProps);
+    get url() {
+        return dgiiConsultaUrl(this.value, {
+            isRnc: this.props.isRnc,
+            isModify: this.props.isModify,
+            recordData: this.props.record.data,
+            companyRnc: session.company_rnc || "",
         });
-
-        onMounted(() => {
-            this._setFormattedUrl(this.props);
-        });
-
-        this._setFormattedUrl = (propsToUse) => {
-            const value = propsToUse.value; // This is the string value of the CharField
-            if (!value) {
-                this.formattedUrl = "";
-                return;
-            }
-
-            let urlBase = "";
-            let queryParam = "";
-
-            if (propsToUse.is_rnc) {
-                urlBase = "https://dgii.gov.do/app/WebApps/ConsultasWeb/consultas/rnc.aspx";
-                queryParam = `txtRnc=${encodeURIComponent(value)}`;
-            } else if (propsToUse.options && propsToUse.options.is_ncf) { // Example if you add is_ncf
-                 urlBase = "https://dgii.gov.do/app/WebApps/ConsultasWeb/consultas/ncf.aspx";
-                 const rnc = propsToUse.record.data.company_rnc_field || session.company_rnc || ''; // Get RNC from another field or session
-                 queryParam = `txtRnc=${encodeURIComponent(rnc)}&txtNcf=${encodeURIComponent(value)}`;
-            } else if (propsToUse.is_modify) {
-                // Assuming 'modified_invoice_number' should also be linked to NCF lookup
-                // You'll need the RNC of the emitter for this.
-                // This part needs clarification on how to get the associated RNC for the modified NCF.
-                // For now, let's assume it's similar to a standard NCF lookup if RNC is available.
-                urlBase = "https://dgii.gov.do/app/WebApps/ConsultasWeb/consultas/ncf.aspx";
-                const rnc = propsToUse.record.data.rnc_cedula || propsToUse.record.data.company_rnc_field || session.company_rnc || '';
-                if (rnc) {
-                    queryParam = `txtRnc=${encodeURIComponent(rnc)}&txtNcf=${encodeURIComponent(value)}`;
-                } else {
-                     this.formattedUrl = ""; // Cannot form URL without RNC
-                     return;
-                }
-            }
-             else {
-                // For fiscal_invoice_number (NCF) and doc_number (if also an NCF)
-                // Default to NCF lookup if no specific option is set but it looks like an NCF
-                // This assumes you have a way to get the associated RNC
-                if (value && value.toString().match(/^B\d{10}$|^E\d{10}$/)) { // Basic NCF pattern check
-                    urlBase = "https://dgii.gov.do/app/WebApps/ConsultasWeb/consultas/ncf.aspx";
-                    const rnc = propsToUse.record.data.rnc_cedula || propsToUse.record.data.company_rnc_field || session.company_rnc || '';
-                     if (rnc) {
-                        queryParam = `txtRnc=${encodeURIComponent(rnc)}&txtNcf=${encodeURIComponent(value)}`;
-                    } else {
-                        this.formattedUrl = ""; // Cannot form URL without RNC
-                        return;
-                    }
-                } else {
-                    this.formattedUrl = ""; // Not a recognized pattern for URL
-                    return;
-                }
-            }
-            this.formattedUrl = `${urlBase}?${queryParam}`;
-        };
     }
 }
 
-// Register the new OWL field widget
 registry.category("fields").add("dgii_reports_url", {
     component: DgiiReportsUrlField,
-    displayName: "DGII Report URL",
-    supportedTypes: ["char"], // Explicitly state it's for char fields
-    extractProps: ({ attrs, field }) => { // Process options from XML
-        return {
-            is_rnc: attrs.options && attrs.options.is_rnc,
-            is_modify: attrs.options && attrs.options.is_modify,
-        };
-    },
+    displayName: _t("Enlace a consulta DGII"),
+    supportedTypes: ["char"],
+    extractProps: ({ options }) => ({
+        isRnc: Boolean(options.is_rnc),
+        isModify: Boolean(options.is_modify),
+    }),
 });
