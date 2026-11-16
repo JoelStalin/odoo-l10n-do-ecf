@@ -2,6 +2,7 @@ import html
 import logging
 import re
 import urllib.parse
+import time
 import urllib.request
 from odoo import models, fields, api, _
 from odoo.exceptions import AccessError, ValidationError, UserError
@@ -14,6 +15,9 @@ DGII_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
 }
+
+
+_DGII_CACHE = {}
 
 
 def _clean_rnc_string(val):
@@ -278,6 +282,43 @@ class Partner(models.Model):
                         "message": _("El número de %s '%s' tiene un dígito verificador inválido.") % (doc_type, self.vat),
                     }
                 }
+            # Autocompleta el contacto con los datos oficiales de la DGII (también en el POS).
+            info = self.dgii_query_rnc(clean)
+            if info:
+                self._l10n_do_apply_dgii_info(info, clean)
+
+    @api.onchange("name")
+    def _onchange_l10n_do_name_dgii(self):
+        """Al escribir un nombre (sin RNC) en un contacto nuevo, lo busca en la DGII y completa los datos."""
+        name = (self.name or "").strip()
+        if len(name) < 4 or self.vat or self._origin.id:
+            return
+        if name.upper() in ("CONSUMIDOR FINAL", "CLIENTE", "CLIENTE GENERAL"):
+            return
+        found = self.dgii_query_by_name(name)
+        if not found:
+            return
+        if len(found) == 1:
+            info = found[0]
+            self.vat = info.get("rnc")
+            self._l10n_do_apply_dgii_info(info, info.get("rnc"))
+            return
+        lines = " | ".join(
+            "%s %s" % (r.get("formatted_rnc") or r.get("rnc"), r.get("name")) for r in found[:8]
+        )
+        return {
+            "warning": {
+                "title": _("Varios resultados en la DGII"),
+                "message": _("Escriba el RNC del que corresponde para completar los datos: %s") % lines,
+            }
+        }
+
+    def _l10n_do_apply_dgii_info(self, info, clean):
+        if info.get("name"):
+            self.name = info["name"]
+        self.is_company = bool(info.get("is_company", len(clean or "") == 9))
+        if info.get("regime"):
+            self.l10n_do_tax_regime = info["regime"]
 
     l10n_do_expense_type = fields.Selection(
         selection="_get_l10n_do_expense_type",
@@ -392,7 +433,14 @@ class Partner(models.Model):
     @api.model
     def dgii_query_rnc(self, rnc_or_cedula):
         """Consulta en línea a la DGII por RNC o Cédula. Retorna diccionario estructurado."""
-        return query_dgii_by_rnc_standalone(rnc_or_cedula)
+        key = _clean_rnc_string(rnc_or_cedula)
+        hit = _DGII_CACHE.get(key)
+        if hit and time.time() - hit[0] < 600:
+            return hit[1]
+        res = query_dgii_by_rnc_standalone(rnc_or_cedula)
+        if res:
+            _DGII_CACHE[key] = (time.time(), res)
+        return res
 
     @api.model
     def dgii_query_by_name(self, name):
