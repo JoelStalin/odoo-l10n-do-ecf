@@ -910,5 +910,9 @@ class AccountMove(models.Model):
                 if not vat:
                     raise ValidationError(_("Este tipo de NCF requiere que el cliente tenga RNC o cédula."))
 
-            if inv.amount_total >= 250000 and not vat:
+            # Norma 06-18: la identificación del comprador se exige en el COMPROBANTE de venta (consumo B02/E32 desde
+            # RD$250,000). El asiento resumen de una sesión del POS no es un comprobante fiscal (no tiene tipo de NCF):
+            # no se valida, porque junta las ventas de muchos clientes y bloquearía el cierre/apertura de la caja.
+            if (inv.move_type in ("out_invoice", "out_refund") and ncf_type
+                    and inv.amount_total >= 250000 and not vat):
                 raise ValidationError(_("Para montos iguales o mayores a RD$250,000 es obligatorio el RNC/Cédula."))
